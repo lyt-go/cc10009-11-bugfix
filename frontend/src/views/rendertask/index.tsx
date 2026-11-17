@@ -11,7 +11,10 @@ const columns = [
   "视口高度",
   "等待策略",
   "脚本注入",
-  "超时阈值秒"
+  "超时阈值秒",
+  "过滤规则快照",
+  "规则编号",
+  "准入结果"
 ]
 const actions = [
   "提交排队",
@@ -46,6 +49,9 @@ export default function RendertaskView() {
   const [rows, setRows] = useState<Row[]>([])
   const [total, setTotal] = useState(0)
   const [errorMessage, setErrorMessage] = useState('')
+  const [notice, setNotice] = useState('')
+  const [snapshotId, setSnapshotId] = useState('')
+  const [snapshotView, setSnapshotView] = useState<Record<string, unknown> | null>(null)
   const [filters, setFilters] = useState<Record<string, string>>({})
   const filterFields = useMemo(() => columns.slice(0, 3), [])
 
@@ -71,19 +77,44 @@ export default function RendertaskView() {
 
   async function runAction(action: string, row: Row) {
     setErrorMessage('')
+    setNotice('')
     try {
       const response = await request(`${ENDPOINT}/${row.id}/actions`, {
         method: 'POST',
-        body: JSON.stringify({ action }),
+        body: JSON.stringify({ values: { action } }),
       })
-      if (!response.ok) {
-        throw new Error('渲染任务动作未生效，请稍后重试')
+      const payload = await response.json().catch(() => ({ ok: false, message: '渲染任务动作未生效' }))
+      if (!response.ok || !payload.ok) {
+        setErrorMessage(payload.message ?? '渲染任务动作未生效，请稍后重试')
+        return
       }
+      setNotice(payload.message ?? '')
       await reload()
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : '渲染任务操作失败')
     }
   }
+
+  async function loadSnapshotView() {
+    setErrorMessage('')
+    if (!snapshotId.trim()) {
+      setErrorMessage('请先填写过滤规则快照编号')
+      return
+    }
+    try {
+      const response = await request(`${ENDPOINT}/snapshots/${snapshotId.trim()}`)
+      const payload = await response.json()
+      if (!response.ok) throw new Error(payload.detail ?? '页面落地侧清单读取失败')
+      setSnapshotView(payload)
+    } catch (error) {
+      setSnapshotView(null)
+      setErrorMessage(error instanceof Error ? error.message : '页面落地侧清单读取失败')
+    }
+  }
+
+  const landingItems = Array.isArray(snapshotView?.['落地清单'])
+    ? (snapshotView?.['落地清单'] as Record<string, unknown>[])
+    : []
 
   return (
     <section className="page" data-module="rendertask">
@@ -154,8 +185,57 @@ export default function RendertaskView() {
         </tbody>
       </table>
 
+      <section className="detail-card">
+        <header className="detail-head">
+          <h3>页面落地侧清单核对</h3>
+          <div className="detail-actions">
+            <input
+              className="inline-input"
+              value={snapshotId}
+              placeholder="过滤规则快照编号"
+              onChange={(event) => setSnapshotId(event.target.value)}
+            />
+            <button className="btn" type="button" onClick={() => void loadSnapshotView()}>按快照核对</button>
+          </div>
+        </header>
+        {snapshotView ? (
+          <>
+            <div className="summary-row">
+              <span className="summary-item">规则编号：{String(snapshotView['规则编号'] ?? '—')}</span>
+              <span className="summary-item">规则版本：{String(snapshotView['规则版本'] ?? '—')}</span>
+              <span className="summary-item">落地条目数：{String(snapshotView['落地条目数'] ?? 0)}</span>
+              <span className="summary-item">快照校验和：{String(snapshotView['快照校验和'] ?? '—')}</span>
+              <span className="summary-item">快照统计：{JSON.stringify(snapshotView['统计'] ?? {})}</span>
+            </div>
+            <table className="data-table">
+              <thead>
+                <tr><th>落地编号</th><th>目标URL</th><th>原始URL</th><th>来源快照</th><th>准入结果</th><th>同步时间</th></tr>
+              </thead>
+              <tbody>
+                {landingItems.map((item) => (
+                  <tr key={String(item.id)}>
+                    <td>{String(item['作业编号'] ?? '—')}</td>
+                    <td className="url-cell">{String(item['目标URL'] ?? '—')}</td>
+                    <td className="url-cell">{String(item['原始URL'] ?? '—')}</td>
+                    <td>{String(item['过滤规则快照'] ?? '—')}</td>
+                    <td>{String(item['准入结果'] ?? '—')}</td>
+                    <td>{String(item['同步时间'] ?? '—')}</td>
+                  </tr>
+                ))}
+                {landingItems.length === 0 && (
+                  <tr><td className="empty-state" colSpan={6}>该快照没有同步到页面落地侧条目</td></tr>
+                )}
+              </tbody>
+            </table>
+          </>
+        ) : (
+          <p className="page-desc">填写过滤规则快照编号后核对页面落地侧清单；违规URL不会出现在清单中。</p>
+        )}
+      </section>
+
       <footer className="page-foot">
         <span>共 {total} 条渲染任务记录</span>
+        {notice && <span className="notice-text">{notice}</span>}
         {errorMessage && <span className="error-text">{errorMessage}</span>}
       </footer>
     </section>

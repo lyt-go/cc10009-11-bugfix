@@ -11,7 +11,10 @@ const columns = [
   "URL去重策略",
   "页面解析器",
   "下载超时秒",
-  "最大页面数"
+  "最大页面数",
+  "过滤规则快照",
+  "执行参数URL数",
+  "拦截URL数"
 ]
 const actions = [
   "提交作业审批",
@@ -46,8 +49,13 @@ export default function CrawljobView() {
   const [rows, setRows] = useState<Row[]>([])
   const [total, setTotal] = useState(0)
   const [errorMessage, setErrorMessage] = useState('')
+  const [notice, setNotice] = useState('')
   const [filters, setFilters] = useState<Record<string, string>>({})
+  const [detail, setDetail] = useState<Record<string, unknown> | null>(null)
   const filterFields = useMemo(() => columns.slice(0, 3), [])
+  const params = (detail?.['执行参数'] ?? null) as Record<string, unknown> | null
+  const asItem = (value: unknown) => value as Record<string, unknown>
+  const asList = (value: unknown) => (Array.isArray(value) ? (value as Record<string, unknown>[]) : [])
 
   const reload = useCallback(async () => {
     setErrorMessage('')
@@ -71,17 +79,33 @@ export default function CrawljobView() {
 
   async function runAction(action: string, row: Row) {
     setErrorMessage('')
+    setNotice('')
     try {
       const response = await request(`${ENDPOINT}/${row.id}/actions`, {
         method: 'POST',
-        body: JSON.stringify({ action }),
+        body: JSON.stringify({ values: { action } }),
       })
-      if (!response.ok) {
-        throw new Error('抓取作业动作未生效，请稍后重试')
+      const payload = await response.json().catch(() => ({ ok: false, message: '抓取作业动作未生效' }))
+      if (!response.ok || !payload.ok) {
+        setErrorMessage(payload.message ?? '抓取作业动作未生效，请稍后重试')
+        return
       }
+      setNotice(payload.message ?? '')
+      if (payload.entry) setDetail(payload.entry)
       await reload()
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : '抓取作业操作失败')
+    }
+  }
+
+  async function openDetail(row: Row) {
+    setErrorMessage('')
+    try {
+      const response = await request(`${ENDPOINT}/${row.id}`)
+      if (!response.ok) throw new Error('作业明细读取失败')
+      setDetail(await response.json())
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : '作业明细读取失败')
     }
   }
 
@@ -143,6 +167,7 @@ export default function CrawljobView() {
                     {action}
                   </button>
                 ))}
+                <button className="link" type="button" onClick={() => void openDetail(row)}>查看执行参数</button>
               </td>
             </tr>
           ))}
@@ -154,8 +179,47 @@ export default function CrawljobView() {
         </tbody>
       </table>
 
+      {detail && (
+        <section className="detail-card">
+          <header className="detail-head">
+            <h3>作业执行参数 · {String(detail['作业编号'] ?? '')}</h3>
+            <button className="btn ghost" type="button" onClick={() => setDetail(null)}>关闭</button>
+          </header>
+          <p className="page-desc">
+            过滤规则快照 {String(detail['过滤规则快照'] ?? '—')}；
+            执行参数快照 {String(detail['执行参数快照'] ?? '—')}；
+            准入URL {String(detail['执行参数URL数'] ?? 0)} 条，拦截 {String(detail['拦截URL数'] ?? 0)} 条。
+          </p>
+          {params ? (
+            <>
+              <div className="summary-row">
+                <span className="summary-item">规则编号：{String(params['规则编号'] ?? '—')}</span>
+                <span className="summary-item">规则版本：{String(params['规则版本'] ?? '—')}</span>
+                <span className="summary-item">快照校验和：{String(params['快照校验和'] ?? '—')}</span>
+                <span className="summary-item">冲突策略：{String(params['冲突策略'] ?? '—')}</span>
+              </div>
+              <h4>准入URL清单（进入执行参数）</h4>
+              <ul className="plain-list">
+                {asList(params['准入明细']).map((item, index) => (
+                  <li key={index}>{String(asItem(item)['规范化URL'])} — {String(asItem(item)['命中说明'])}</li>
+                ))}
+              </ul>
+              <h4>拦截URL清单（不进入执行参数）</h4>
+              <ul className="plain-list">
+                {asList(params['拦截URL清单']).map((item, index) => (
+                  <li key={index}>{String(asItem(item)['规范化URL'])} — {String(asItem(item)['原因'])}</li>
+                ))}
+              </ul>
+            </>
+          ) : (
+            <p className="page-desc">该作业尚未启动作业，没有生成执行参数。</p>
+          )}
+        </section>
+      )}
+
       <footer className="page-foot">
         <span>共 {total} 条抓取作业记录</span>
+        {notice && <span className="notice-text">{notice}</span>}
         {errorMessage && <span className="error-text">{errorMessage}</span>}
       </footer>
     </section>

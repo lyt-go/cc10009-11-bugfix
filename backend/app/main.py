@@ -5,14 +5,25 @@
 """
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.routers import ROUTERS
+from app.services.urlfilter import get_service as get_urlfilter_service
 from app.store import store
 
-app = FastAPI(title="分布式网页抓取调度平台", version="1.0.0")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """启动时补齐已生效规则缺失的快照：幂等，重复启动不会多出范围。"""
+    get_urlfilter_service().ensure_effective_snapshots()
+    yield
+
+
+app = FastAPI(title="分布式网页抓取调度平台", version="1.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
